@@ -4737,5 +4737,25 @@
     window.addEventListener('load', load);
 })();
 </script>
+<script id="__HIDZ_KONS_PATCH_V3__">
+(function () {
+    'use strict';
+    var META='hidz_counseling_meta', MSG='hidz_counseling_messages', meta={}, latest={}, watched={}, started=false;
+
+    function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});}
+    function getUid(el,picker){if(!el)return null;var on=el.getAttribute('onclick')||'',re=picker?/_konsPickUser\(['"]([^'"]+)/:/openKonsChat\(['"]([^'"]+)/,m=on.match(re);return m?m[1]:null;}
+    function t(m){return Number(m&&m.time)||0;}
+    function preview(uid){var m=latest[uid],x=meta[uid]||{};if(m&&!m.delAll){if(m.type==='text')return String(m.text||'').trim().slice(0,80)||'Pesan';if(m.type==='sticker')return'Stiker';if(m.type==='image')return'Foto';if(m.type==='video')return'Video';return m.name?'File · '+String(m.name).slice(0,60):'File';}var f=String(x.lastMsg||'').trim();if(f)return f;return x.lastAt?(x.lastSender==='admin'?'Balasan admin':'Pesan masuk'):'';}
+    function st(uid){return Math.max(t(latest[uid]),Number((meta[uid]||{}).lastAt)||0);}
+    function render(rootId,picker){var root=document.getElementById(rootId);if(!root)return;var nodes=Array.prototype.slice.call(root.querySelectorAll(picker?'.user-item':'.kons-conv-item')).filter(function(n){return!!getUid(n,picker);});nodes.sort(function(a,b){var au=getUid(a,picker),bu=getUid(b,picker),at=st(au),bt=st(bu);if(at!==bt)return bt-at;if(!picker){var ar=Number(meta[au]&&meta[au].unreadAdmin)||0,br=Number(meta[bu]&&meta[bu].unreadAdmin)||0;if(ar!==br)return br-ar;}return String((meta[au]&&meta[au].username)||au).localeCompare(String((meta[bu]&&meta[bu].username)||bu));});nodes.forEach(function(n){var uid=getUid(n,picker),p=n.querySelector('.kons-conv-preview');if(p){var txt=preview(uid),x=meta[uid]||{};if(txt)p.innerHTML=(x.lastSender==='admin'?'<i class="fas fa-reply" style="margin-right:4px;opacity:.6;"></i>':'')+esc(txt);else p.innerHTML=picker?'<i style="opacity:.6;">Belum ada percakapan — ketuk buat mulai chat</i>':'Belum ada pesan.';}root.appendChild(n);});}
+    function renderAll(){render('konsConvList',false);render('konsPickerList',true);}
+    function watch(uid){if(!uid||watched[uid])return;watched[uid]=true;firebase.database().ref(MSG+'/'+uid).limitToLast(20).on('value',function(snap){var data=snap.val()||{},best=null;Object.keys(data).forEach(function(k){var m=data[k];if(!m||m.delAll)return;if(!best||t(m)>t(best))best=m;});latest[uid]=best;renderAll();},function(e){console.error('[Konseling] gagal sinkron pesan terbaru:',uid,e);});}
+    function sync(){Object.keys(meta).forEach(watch);Object.keys(latest).forEach(function(uid){if(!meta[uid])delete latest[uid];});renderAll();}
+    function scrollBack(){setTimeout(function(){var list=document.getElementById('konsConvList');if(!list)return;var target=list.closest?list.closest('.card'):list,top=Math.max(0,target.getBoundingClientRect().top+window.pageYOffset-12);try{window.scrollTo({top:top,behavior:'auto'});}catch(e){window.scrollTo(0,top);}},0);}
+    function hook(){var old=window.closeKonsChat;if(typeof old!=='function'){setTimeout(hook,250);return;}if(old.__hidzV3)return;var wrapped=function(){try{old.apply(this,arguments);}catch(e){console.error('[Konseling] close chat gagal:',e);}var o=document.getElementById('konsChatOverlay');if(o)o.classList.remove('show');scrollBack();};wrapped.__hidzV3=true;window.closeKonsChat=wrapped;var o=document.getElementById('konsChatOverlay');if(o&&!o.__hidzV3){o.__hidzV3=true;o.addEventListener('click',function(e){var b=e.target&&e.target.closest?e.target.closest('.kons-back-btn'):null;if(b)setTimeout(function(){var x=document.getElementById('konsChatOverlay');if(x)x.classList.remove('show');scrollBack();},0);},true);}}
+    function start(){if(started)return;if(typeof firebase==='undefined'||!firebase.apps||!firebase.apps.length){setTimeout(start,700);return;}if(!firebase.auth)return;var u=firebase.auth().currentUser;if(!u){setTimeout(start,700);return;}u.getIdTokenResult(true).then(function(r){if(!(r&&r.claims&&r.claims.admin===true)){setTimeout(start,1500);return;}started=true;firebase.database().ref(META).on('value',function(s){meta=s.val()||{};sync();},function(e){console.error('[Konseling] gagal sinkron meta:',e);});hook();}).catch(function(){setTimeout(start,1500);});}
+    start();
+})();
+</script>
 </body>
 </html>
