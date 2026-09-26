@@ -4757,5 +4757,212 @@
     start();
 })();
 </script>
+
+<script>
+(function () {
+    'use strict';
+
+    var META_REF = 'hidz_counseling_meta';
+    var MSG_REF  = 'hidz_counseling_messages';
+
+    var latestByUser = {};
+    var watchedUsers = {};
+    var metaCache = {};
+    var refreshTimer = null;
+
+    function messageTime(message) {
+        return Number(message && message.time || 0);
+    }
+
+    function getLatestMessage(uid) {
+        return firebase.database().ref(MSG_REF + '/' + uid).limitToLast(1).once('value')
+            .then(function (snap) {
+                var data = snap.val() || {};
+                var latest = null;
+                Object.keys(data).forEach(function (key) {
+                    var message = data[key];
+                    if (!message || message.delAll) return;
+                    if (!latest || messageTime(message) > messageTime(latest)) latest = message;
+                });
+                latestByUser[uid] = latest;
+                return latest;
+            });
+    }
+
+    function previewText(uid) {
+        var latest = latestByUser[uid];
+        var meta = metaCache[uid] || {};
+
+        if (latest) {
+            if (latest.type === 'text') return String(latest.text || '').trim().slice(0, 80) || 'Pesan';
+            if (latest.type === 'sticker') return 'Stiker';
+            if (latest.type === 'image') return 'Foto';
+            if (latest.type === 'video') return 'Video';
+            return latest.name ? 'File · ' + String(latest.name).slice(0, 60) : 'File';
+        }
+
+        var fallback = String(meta.lastMsg || '').trim();
+        if (fallback) return fallback;
+        if (meta.lastAt) return meta.lastSender === 'admin' ? 'Balasan admin' : 'Pesan masuk';
+        return '';
+    }
+
+    function sortTime(uid) {
+        var latest = latestByUser[uid];
+        var meta = metaCache[uid] || {};
+        return Math.max(messageTime(latest), Number(meta.lastAt || 0));
+    }
+
+    function userIdFromItem(item) {
+        var onclick = item.getAttribute('onclick') || '';
+        var match = onclick.match(/openKonsChat\(['"]([^'"]+)/);
+        return match ? match[1] : null;
+    }
+
+    function refreshConversationList() {
+        var root = document.getElementById('konsConvList');
+        if (!root) return;
+
+        var items = Array.prototype.slice.call(root.querySelectorAll('.kons-conv-item'));
+        items.sort(function (a, b) {
+            var aId = userIdFromItem(a);
+            var bId = userIdFromItem(b);
+            var aTime = sortTime(aId);
+            var bTime = sortTime(bId);
+
+            if (aTime !== bTime) return bTime - aTime;
+
+            var aUnread = Number((metaCache[aId] || {}).unreadAdmin || 0);
+            var bUnread = Number((metaCache[bId] || {}).unreadAdmin || 0);
+            if (aUnread !== bUnread) return bUnread - aUnread;
+
+            return String((metaCache[aId] || {}).username || aId || '')
+                .localeCompare(String((metaCache[bId] || {}).username || bId || ''));
+        });
+
+        items.forEach(function (item) {
+            var uid = userIdFromItem(item);
+            if (!uid) return;
+
+            var preview = item.querySelector('.kons-conv-preview');
+            if (preview) {
+                var meta = metaCache[uid] || {};
+                var text = previewText(uid);
+                preview.innerHTML = '';
+
+                if (text) {
+                    if (meta.lastSender === 'admin' || (latestByUser[uid] && latestByUser[uid].sender === 'admin')) {
+                        var replyIcon = document.createElement('i');
+                        replyIcon.className = 'fas fa-reply';
+                        replyIcon.style.marginRight = '4px';
+                        replyIcon.style.opacity = '.6';
+                        preview.appendChild(replyIcon);
+                    }
+                    preview.appendChild(document.createTextNode(text));
+                }
+            }
+
+            root.appendChild(item);
+        });
+    }
+
+    function watchUser(uid) {
+        if (!uid || watchedUsers[uid]) return;
+        watchedUsers[uid] = true;
+
+        firebase.database().ref(MSG_REF + '/' + uid).limitToLast(1).on('value', function (snap) {
+            var data = snap.val() || {};
+            var latest = null;
+
+            Object.keys(data).forEach(function (key) {
+                var message = data[key];
+                if (!message || message.delAll) return;
+                if (!latest || messageTime(message) > messageTime(latest)) latest = message;
+            });
+
+            latestByUser[uid] = latest;
+            refreshConversationList();
+        });
+    }
+
+    function syncUsers() {
+        Object.keys(metaCache).forEach(watchUser);
+        refreshConversationList();
+    }
+
+    function start() {
+        if (typeof firebase === 'undefined' || !firebase.apps || !firebase.apps.length) {
+            setTimeout(start, 700);
+            return;
+        }
+        if (!firebase.auth) return;
+
+        var user = firebase.auth().currentUser;
+        if (!user) {
+            setTimeout(start, 1000);
+            return;
+        }
+
+        user.getIdTokenResult(true).then(function (result) {
+            if (!(result && result.claims && result.claims.admin === true)) {
+                setTimeout(start, 1500);
+                return;
+            }
+
+            firebase.database().ref(META_REF).on('value', function (snap) {
+                metaCache = snap.val() || {};
+                syncUsers();
+            });
+
+            var list = document.getElementById('konsConvList');
+            if (list && typeof MutationObserver !== 'undefined') {
+                var observer = new MutationObserver(function () {
+                    clearTimeout(refreshTimer);
+                    refreshTimer = setTimeout(refreshConversationList, 0);
+                });
+                observer.observe(list, { childList: true, subtree: true });
+            }
+
+            setTimeout(refreshConversationList, 0);
+        }).catch(function () {
+            setTimeout(start, 1500);
+        });
+    }
+
+    (function fixBackToCounselingList() {
+        var originalClose = window.closeKonsChat;
+
+        if (typeof originalClose !== 'function') {
+            setTimeout(fixBackToCounselingList, 300);
+            return;
+        }
+        if (originalClose.__hidzCounselingBackFix) return;
+
+        function closeAndReturn() {
+            try { originalClose.apply(this, arguments); } catch (e) {}
+
+            setTimeout(function () {
+                var list = document.getElementById('konsConvList');
+                if (!list) return;
+
+                var section = list.closest ? list.closest('.card') : list;
+                if (!section) section = list;
+
+                try {
+                    section.scrollIntoView({ behavior: 'auto', block: 'start' });
+                } catch (e) {
+                    section.scrollIntoView();
+                }
+            }, 80);
+        }
+
+        closeAndReturn.__hidzCounselingBackFix = true;
+        window.closeKonsChat = closeAndReturn;
+    })();
+
+    start();
+})();
+</script>
+
 </body>
 </html>
