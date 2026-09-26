@@ -3888,6 +3888,14 @@
             '</div>';
     }
 
+    function konsPreviewText(meta) {
+        if (!meta) return '';
+        var text = String(meta.lastMsg || '').trim();
+        if (text) return text;
+        if (meta.lastAt) return meta.lastSender === 'admin' ? 'Balasan admin' : 'Pesan masuk';
+        return 'Belum ada percakapan';
+    }
+
     /* ================= DAFTAR PERCAKAPAN ================= */
     function renderConvList() {
         var wrap = document.getElementById('konsConvList');
@@ -3895,7 +3903,16 @@
         if (!wrap) return;
 
         var ids = Object.keys(_convMeta).filter(function (id) { return _convMeta[id]; });
-        ids.sort(function (a, b) { return (_convMeta[b].lastAt || 0) - (_convMeta[a].lastAt || 0); });
+        ids.sort(function (a, b) {
+            var am = _convMeta[a] || {}, bm = _convMeta[b] || {};
+            var at = Number(am.lastAt) || 0;
+            var bt = Number(bm.lastAt) || 0;
+            if (at !== bt) return bt - at;
+            var au = Number(am.unreadAdmin) || 0;
+            var bu = Number(bm.unreadAdmin) || 0;
+            if (au !== bu) return bu - au;
+            return String(am.username || a).localeCompare(String(bm.username || b));
+        });
 
         var unreadConvCount = 0;
         ids.forEach(function (id) { if ((_convMeta[id].unreadAdmin || 0) > 0) unreadConvCount++; });
@@ -3918,7 +3935,7 @@
                         '<div class="u-name">' + escAdmin(meta.username || id) + '</div>' +
                         (unread > 0 ? '<span class="kons-unread-pill">' + unread + '</span>' : '') +
                     '</div>' +
-                    '<div class="kons-conv-preview">' + (meta.lastSender === 'admin' ? '<i class="fas fa-reply" style="margin-right:4px;opacity:.6;"></i>' : '') + escAdmin(meta.lastMsg || '') + '</div>' +
+                    '<div class="kons-conv-preview">' + (meta.lastSender === 'admin' ? '<i class="fas fa-reply" style="margin-right:4px;opacity:.6;"></i>' : '') + escAdmin(konsPreviewText(meta)) + '</div>' +
                     '<div class="kons-conv-time">' + fmtRelative(meta.lastAt) + '</div>' +
                 '</div>' +
             '</div>';
@@ -3972,7 +3989,13 @@
                        (u.role || '').toLowerCase().indexOf(_konsPickerQuery) > -1;
             });
         }
-        all.sort(function (a, b) { return a.username.localeCompare(b.username); });
+        all.sort(function (a, b) {
+            var am = _convMeta[a.id] || {}, bm = _convMeta[b.id] || {};
+            var at = Number(am.lastAt) || 0;
+            var bt = Number(bm.lastAt) || 0;
+            if (at !== bt) return bt - at;
+            return a.username.localeCompare(b.username);
+        });
 
         if (!all.length) {
             listEl.innerHTML = '<div class="empty-state">' +
@@ -3987,8 +4010,8 @@
             var roleKey  = u.role === 'vip' ? 'vip' : 'user';
             var roleTxt  = roleKey.toUpperCase();
             var meta     = _convMeta[u.id];
-            var preview  = meta && meta.lastMsg
-                ? ((meta.lastSender === 'admin' ? '<i class="fas fa-reply" style="margin-right:4px;opacity:.6;"></i>' : '') + escAdmin(meta.lastMsg))
+            var preview  = meta
+                ? ((meta.lastSender === 'admin' ? '<i class="fas fa-reply" style="margin-right:4px;opacity:.6;"></i>' : '') + escAdmin(konsPreviewText(meta)))
                 : '<i style="opacity:.6;">Belum ada percakapan — ketuk buat mulai chat</i>';
             html += '<div class="user-item" onclick="window._konsPickUser(\'' + u.id + '\')" style="display:flex;gap:10px;align-items:center;">' +
                 avatarBoxHtml(u.id, { hideDot: true }) +
@@ -4409,6 +4432,12 @@
     window.closeKonsChat = function () {
         var overlay = document.getElementById('konsChatOverlay');
         if (overlay) overlay.classList.remove('show');
+        var konsList = document.getElementById('konsConvList');
+        if (konsList) setTimeout(function () {
+            var target = konsList.closest ? konsList.closest('.card') : konsList;
+            try { target.scrollIntoView({ behavior: 'auto', block: 'start' }); }
+            catch (e) { target.scrollIntoView(); }
+        }, 0);
         window._konsAdminCloseMsgMenu();
         window._konsAdminCloseReactPicker();
         if (_activeRef)       { _activeRef.off(); _activeRef = null; }
