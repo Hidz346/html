@@ -1256,14 +1256,53 @@
                 return Promise.reject(new Error('FIREBASE_AUTH_UNAVAILABLE'));
             }
 
-            var loginPromise = firebase.auth().signInWithCustomToken(token);
-            var timeoutPromise = new Promise(function (_, reject) {
-                setTimeout(function () {
-                    reject(new Error('FIREBASE_AUTH_TIMEOUT'));
-                }, 12000);
-            });
+            var auth = firebase.auth();
+            var settled = false;
+            var timer = null;
 
-            return Promise.race([loginPromise, timeoutPromise]);
+            return new Promise(function (resolve, reject) {
+                try {
+                    timer = setTimeout(function () {
+                        if (settled) return;
+                        settled = true;
+
+                        /* Firebase tidak punya AbortController untuk
+                           signInWithCustomToken(). Pastikan session yang
+                           mungkin sudah sempat terbentuk setelah timeout
+                           langsung dibersihkan. */
+                        auth.signOut().catch(function () {});
+
+                        reject(new Error('FIREBASE_AUTH_TIMEOUT'));
+                    }, 12000);
+
+                    auth.signInWithCustomToken(token)
+                        .then(function (userCredential) {
+                            if (settled) {
+                                /* Request yang terlambat selesai setelah
+                                   timeout tidak boleh meninggalkan session. */
+                                auth.signOut().catch(function () {});
+                                return;
+                            }
+
+                            settled = true;
+                            clearTimeout(timer);
+                            resolve(userCredential);
+                        })
+                        .catch(function (err) {
+                            if (settled) return;
+
+                            settled = true;
+                            clearTimeout(timer);
+                            reject(err);
+                        });
+                } catch (err) {
+                    if (settled) return;
+
+                    settled = true;
+                    clearTimeout(timer);
+                    reject(err);
+                }
+            });
         }
 
         window.submitAdminGate = function () {
@@ -1295,14 +1334,34 @@
                 .then(function (res) {
                     if (res && res.ok && res.firebaseToken) {
                         return _adminFirebaseLogin(res.firebaseToken).then(function () {
-                            _resetGateFailState();
                             try {
-                                sessionStorage.setItem(GATE_OK_KEY, '1');
-                                sessionStorage.removeItem(GATE_AUTH_KEY);
-                            } catch (e1) {}
-                            window._adminAuth = { username: username };
-                            if (typeof _adminBoot === 'function') _adminBoot();
-                            gateEl.style.display = 'none';
+                                window._adminAuth = { username: username };
+
+                                if (typeof _adminBoot === 'function') {
+                                    _adminBoot();
+                                }
+
+                                _resetGateFailState();
+
+                                try {
+                                    sessionStorage.setItem(GATE_OK_KEY, '1');
+                                    sessionStorage.removeItem(GATE_AUTH_KEY);
+                                } catch (e1) {}
+
+                                gateEl.style.display = 'none';
+                            } catch (bootError) {
+                                window._adminAuth = null;
+
+                                if (typeof firebase !== 'undefined' && firebase.auth) {
+                                    return firebase.auth().signOut()
+                                        .catch(function () {})
+                                        .then(function () {
+                                            throw bootError;
+                                        });
+                                }
+
+                                throw bootError;
+                            }
                         });
                     }
 
