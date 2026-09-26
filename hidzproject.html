@@ -3723,6 +3723,30 @@
             }
         })();
     <\/script>
+<script id="__HIDZ_KONS_SEND_SYNC_V3__">
+(function () {
+    'use strict';
+    var META='hidz_counseling_meta', MSG='hidz_counseling_messages';
+
+    function hook(){
+        var old=window._konsSendText;
+        if(typeof old!=='function'){setTimeout(hook,250);return;}
+        if(old.__hidzSendV3)return;
+        var wrapped=function(){
+            var input=document.getElementById('konsTextInput');if(!input)return;
+            var text=String(input.value||'').trim(),session=null;
+            try{session=JSON.parse(localStorage.getItem('hidz_session')||'{}');}catch(e){}
+            if(!text||!session||!session.id)return;
+            input.value='';
+            var now=Date.now(),msg={sender:'user',type:'text',text:text,time:now},ref=firebase.database().ref(MSG+'/'+session.id).push();
+            ref.set(msg).then(function(){return firebase.database().ref(META+'/'+session.id).update({username:session.username||'user',lastMsg:text.substring(0,80),lastAt:now,lastSender:'user'});}).then(function(){return firebase.database().ref(META+'/'+session.id+'/unreadAdmin').transaction(function(cur){return(cur||0)+1;});}).catch(function(err){input.value=text;if(typeof showHzToast==='function')showHzToast('Pesan gagal terkirim, coba lagi ya');console.error('[Konseling] sinkron kirim pesan gagal:',err);});
+        };
+        wrapped.__hidzSendV3=true;
+        window._konsSendText=wrapped;
+    }
+    hook();
+})();
+</script>
 </body>
 </html>
 `;
