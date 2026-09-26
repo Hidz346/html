@@ -1436,7 +1436,7 @@
     </div>
 
     <!-- KONSELING -->
-    <div class="card">
+    <div class="card" id="konselingCard">
         <div class="sec-hdr">
             <div class="sec-title">Konseling <span class="sec-spark">&#128172;</span></div>
             <div style="display:flex;align-items:center;gap:8px;">
@@ -3897,6 +3897,55 @@
     }
 
     /* ================= DAFTAR PERCAKAPAN ================= */
+    function previewFromKonsMessage(m) {
+        if (!m) return '';
+        if (m.type === 'image') return '📷 Foto';
+        if (m.type === 'video') return '🎥 Video';
+        if (m.type === 'sticker') return '😊 Sticker';
+        if (m.type && m.type !== 'text') return '📎 ' + String(m.name || 'File').slice(0, 60);
+        return String(m.text || '').trim().slice(0, 80);
+    }
+
+    var _konsHydratedAt = {};
+    var _konsHydrating = {};
+    function hydrateConversationMeta() {
+        var ids = Object.keys(_convMeta).filter(function (id) { return _convMeta[id]; });
+        ids.forEach(function (id) {
+            var meta = _convMeta[id];
+            var stamp = Number(meta.lastAt || 0);
+            if (_konsHydrating[id] || _konsHydratedAt[id] === stamp) return;
+            _konsHydrating[id] = true;
+            firebase.database().ref(KONS_MSG_REF + '/' + id).limitToLast(1).once('value').then(function (snap) {
+                var raw = snap.val() || {};
+                var keys = Object.keys(raw);
+                if (!keys.length) return;
+                var lastMsg = raw[keys[0]];
+                keys.forEach(function (key) {
+                    var candidate = raw[key];
+                    if (candidate && Number(candidate.time || 0) > Number(lastMsg && lastMsg.time || 0)) lastMsg = candidate;
+                });
+                if (!lastMsg) return;
+                var lastAt = Number(lastMsg.time || 0);
+                var current = _convMeta[id] || {};
+                var preview = previewFromKonsMessage(lastMsg);
+                if (lastAt > Number(current.lastAt || 0) || current.lastMsg !== preview || !current.username) {
+                    _convMeta[id] = Object.assign({}, current, {
+                        lastAt: lastAt,
+                        lastMsg: preview,
+                        lastSender: lastMsg.sender || current.lastSender,
+                        username: current.username || id
+                    });
+                    renderConvList();
+                }
+                _konsHydratedAt[id] = Number((_convMeta[id] && _convMeta[id].lastAt) || lastAt);
+            }).catch(function (err) {
+                console.error('[Konseling] gagal sinkron preview percakapan ' + id + ':', err);
+            }).finally(function () {
+                delete _konsHydrating[id];
+            });
+        });
+    }
+
     function renderConvList() {
         var wrap = document.getElementById('konsConvList');
         var badge = document.getElementById('konsAdminBadge');
@@ -4101,6 +4150,7 @@
                 _firstSnap = false;
                 _convMeta = next;
                 renderConvList();
+                hydrateConversationMeta();
             }, function (err) {
                 /* Permission denied sebelum login tidak lagi sampai ke UI.
                    Kalau token admin berubah/berakhir, hentikan listener dan
@@ -4260,7 +4310,7 @@
            di daftar konseling walau user belum pernah kirim apa-apa */
         firebase.database().ref(KONS_META_REF + '/' + _activeUid).update({
             username: (_convMeta[_activeUid] && _convMeta[_activeUid].username) || _activeUsername || _activeUid,
-            lastMsg: String(msg.text || '').substring(0, 80),
+            lastMsg: previewFromKonsMessage(msg),
             lastAt: msg.time,
             lastSender: 'admin'
         }).catch(function (err) { console.error('[Konseling] gagal update meta', err); });
@@ -4396,18 +4446,20 @@
                 .catch(function (err) { console.error('[Konseling] gagal update status baca', err); });
 
             if (_activeRef) _activeRef.off();
+            _activeMsgs = {};
             _activeRef = firebase.database().ref(KONS_MSG_REF + '/' + userId).limitToLast(300);
             var onErr = function (err) {
                 showToast('Gagal memuat pesan (' + _fbErrShort(err) + ')', 'err');
                 console.error('[Konseling] gagal baca pesan', err);
             };
-            _activeRef.on('child_added', function (snap) {
-                _activeMsgs[snap.key] = snap.val(); renderChatMsgs();
-                /* Chat lagi kebuka & ada pesan baru masuk -> langsung tandai terbaca */
+
+            /* Snapshot awal + perubahan berikutnya ditangani satu listener value,
+               sehingga placeholder "Belum ada pesan" tidak menang karena race. */
+            _activeRef.on('value', function (snap) {
+                _activeMsgs = snap.val() || {};
+                renderChatMsgs();
                 firebase.database().ref(KONS_META_REF + '/' + userId + '/readAtAdmin').set(Date.now()).catch(function () {});
             }, onErr);
-            _activeRef.on('child_changed', function (snap) { _activeMsgs[snap.key] = snap.val(); renderChatMsgs(); }, onErr);
-            _activeRef.on('child_removed', function (snap) { delete _activeMsgs[snap.key]; renderChatMsgs(); }, onErr);
 
             /* Pantau kapan user terakhir baca balasan admin (centang biru) */
             if (_activeReadRef) _activeReadRef.off();
@@ -4432,11 +4484,10 @@
     window.closeKonsChat = function () {
         var overlay = document.getElementById('konsChatOverlay');
         if (overlay) overlay.classList.remove('show');
-        var konsList = document.getElementById('konsConvList');
-        if (konsList) setTimeout(function () {
-            var target = konsList.closest ? konsList.closest('.card') : konsList;
-            try { target.scrollIntoView({ behavior: 'auto', block: 'start' }); }
-            catch (e) { target.scrollIntoView(); }
+        var konsCard = document.getElementById('konselingCard');
+        if (konsCard) setTimeout(function () {
+            try { konsCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+            catch (e) { konsCard.scrollIntoView(); }
         }, 0);
         window._konsAdminCloseMsgMenu();
         window._konsAdminCloseReactPicker();
