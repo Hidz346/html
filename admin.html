@@ -1214,6 +1214,58 @@
             })();
         }
 
+        /* Request gerbang tidak boleh menggantung selamanya.
+           Jika endpoint/API sedang macet, UI harus kembali ke keadaan normal
+           dan memberi pesan yang jelas, bukan berhenti di "Memeriksa...". */
+        function _adminLoginRequest(username, password) {
+            var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            var timer = setTimeout(function () {
+                if (controller) controller.abort();
+            }, 12000);
+
+            var options = {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: username, password: password })
+            };
+            if (controller) options.signal = controller.signal;
+
+            return fetch('/api/admin-login', options)
+                .then(function (r) {
+                    if (!r || !r.ok) {
+                        throw new Error('HTTP_' + (r ? r.status : '0'));
+                    }
+                    return r.text();
+                })
+                .then(function (text) {
+                    var res;
+                    try {
+                        res = JSON.parse(text);
+                    } catch (e) {
+                        throw new Error('INVALID_JSON');
+                    }
+                    return res;
+                })
+                .finally(function () {
+                    clearTimeout(timer);
+                });
+        }
+
+        function _adminFirebaseLogin(token) {
+            if (typeof firebase === 'undefined' || !firebase.auth) {
+                return Promise.reject(new Error('FIREBASE_AUTH_UNAVAILABLE'));
+            }
+
+            var loginPromise = firebase.auth().signInWithCustomToken(token);
+            var timeoutPromise = new Promise(function (_, reject) {
+                setTimeout(function () {
+                    reject(new Error('FIREBASE_AUTH_TIMEOUT'));
+                }, 12000);
+            });
+
+            return Promise.race([loginPromise, timeoutPromise]);
+        }
+
         window.submitAdminGate = function () {
             var uEl   = document.getElementById('gateUser');
             var pEl   = document.getElementById('gatePass');
@@ -1221,6 +1273,8 @@
             var btn   = document.getElementById('gateBtn');
             var username = uEl ? uEl.value.trim() : '';
             var password = pEl ? pEl.value : '';
+
+            if (!errEl || !btn || !gateEl) return;
 
             if (_gateLockRemainingMs() > 0) {
                 _startGateCooldownUI();
@@ -1237,48 +1291,54 @@
             btn.disabled = true;
             btn.textContent = 'Memeriksa...';
 
-            fetch('/api/admin-login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: username, password: password })
-            })
-                .then(function (r) { return r.json(); })
+            _adminLoginRequest(username, password)
                 .then(function (res) {
-                    btn.disabled = false;
-                    btn.textContent = 'Masuk';
                     if (res && res.ok && res.firebaseToken) {
-                        if (!firebase || !firebase.auth) {
-                            errEl.textContent = 'Firebase Authentication gagal dimuat. Coba refresh halaman.';
-                            errEl.style.display = 'block';
-                            return;
-                        }
-                        firebase.auth().signInWithCustomToken(res.firebaseToken).then(function () {
+                        return _adminFirebaseLogin(res.firebaseToken).then(function () {
                             _resetGateFailState();
-                            try { sessionStorage.setItem(GATE_OK_KEY, '1'); sessionStorage.removeItem(GATE_AUTH_KEY); } catch (e1) {}
+                            try {
+                                sessionStorage.setItem(GATE_OK_KEY, '1');
+                                sessionStorage.removeItem(GATE_AUTH_KEY);
+                            } catch (e1) {}
                             window._adminAuth = { username: username };
                             if (typeof _adminBoot === 'function') _adminBoot();
                             gateEl.style.display = 'none';
-                        }).catch(function () {
-                            errEl.textContent = 'Autentikasi keamanan gagal. Coba login kembali.';
-                            errEl.style.display = 'block';
                         });
-                    } else if (res && res.locked) {
+                    }
+
+                    if (res && res.locked) {
                         _showServerLockCountdown(res.retryAfterSec);
+                        return;
+                    }
+
+                    var cooldownSec = _registerGateFail(username);
+                    if (cooldownSec > 0) {
+                        _startGateCooldownUI();
                     } else {
-                        var cooldownSec = _registerGateFail(username);
-                        if (cooldownSec > 0) {
-                            _startGateCooldownUI();
-                        } else {
-                            errEl.textContent = 'Username atau password salah!';
-                            errEl.style.display = 'block';
-                        }
+                        errEl.textContent = 'Username atau password salah!';
+                        errEl.style.display = 'block';
                     }
                 })
-                .catch(function () {
+                .catch(function (err) {
+                    console.error('[HIDZ ADMIN] login gagal:', err);
+                    var message = 'Gagal terhubung ke server. Coba lagi.';
+
+                    if (err && err.name === 'AbortError') {
+                        message = 'Server terlalu lama merespons. Coba lagi.';
+                    } else if (err && err.message === 'FIREBASE_AUTH_TIMEOUT') {
+                        message = 'Autentikasi terlalu lama. Coba login kembali.';
+                    } else if (err && err.message === 'FIREBASE_AUTH_UNAVAILABLE') {
+                        message = 'Firebase Authentication gagal dimuat. Coba refresh halaman.';
+                    } else if (err && err.message === 'INVALID_JSON') {
+                        message = 'Respons server tidak valid. Coba lagi.';
+                    }
+
+                    errEl.textContent = message;
+                    errEl.style.display = 'block';
+                })
+                .finally(function () {
                     btn.disabled = false;
                     btn.textContent = 'Masuk';
-                    errEl.textContent = 'Gagal terhubung ke server. Coba lagi.';
-                    errEl.style.display = 'block';
                 });
         };
 
